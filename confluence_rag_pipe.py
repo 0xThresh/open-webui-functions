@@ -1,20 +1,24 @@
 """
-title: Confluence Pipe
+title: Confluence RAG Pipe
 author: James W. (0xThresh)
 author_url: https://github.com/0xThresh
 funding_url: https://github.com/open-webui
 version: 0.1
 license: MIT
-requirements: atlassian-python-api, pytesseract, Pillow
+requirements: atlassian-python-api, pytesseract, Pillow, langchain==0.3, langchain_community==0.3, langchain_ollama==0.2.0, pydantic
 """
 
 import os
+from langchain import hub
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import ConfluenceLoader
 from langchain_community.embeddings.sentence_transformer import (
     SentenceTransformerEmbeddings,
 )
-from langchain_text_splitters import CharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_ollama import OllamaLLM
+from langchain.schema.runnable import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser, PydanticOutputParser
 from typing import Union, Generator, Iterator, Optional
 from pydantic import BaseModel, Field
 from open_webui.utils.misc import get_last_user_message
@@ -25,6 +29,7 @@ class Pipe:
         CONFLUENCE_SITE: str = Field(
             description="The URL of your Confluence site, such as https://open-webui.atlassian.net/",
         )
+        pass
 
     class UserValves(BaseModel):
         CONFLUENCE_SPACE: str = Field(
@@ -36,7 +41,10 @@ class Pipe:
         CONFLUENCE_API_KEY: str = Field(
             description="Your Confluence API key, generated here for Confluence Cloud: https://id.atlassian.com/manage-profile/security/api-tokens",
         )
-
+        OLLAMA_MODEL: str = Field(
+            default="llama3:instruct", description="The Ollama model to use"
+        )
+        pass
 
     def __init__(self):
         self.type = "pipe"
@@ -55,20 +63,12 @@ class Pipe:
             username=username,
             api_key=api_key,
             space_key=space_key,
-            include_attachments=True,
+            include_attachments=False,  # This is failing, try to fix later
             # Start by limiting to 5 to avoid overwhelming the context window
-            limit=5,
+            max_pages=5,
         )
         documents = loader.load()
         return documents
-
-    def pipes(self):
-        return [
-            {
-                "id": self.id,
-                "name": self.name,
-            }
-        ]
 
     def pipe(
         self,
@@ -90,14 +90,19 @@ class Pipe:
 
         # Get the documents from Confluence
         documents = self.get_confluence_docs(
-            user_valves.CONFLUENCE_USERNAME, 
-            user_valves.CONFLUENCE_API_KEY, 
-            user_valves.CONFLUENCE_SPACE
+            user_valves.CONFLUENCE_USERNAME,
+            user_valves.CONFLUENCE_API_KEY,
+            user_valves.CONFLUENCE_SPACE,
         )
 
+        # Get the user's question from the UI
+        query = get_last_user_message(body["messages"])
+
         # split docs into chunks
-        text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=0)
-        docs = text_splitter.split_documents(documents)
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000, chunk_overlap=200, add_start_index=True
+        )
+        splits = text_splitter.split_documents(documents)
 
         # create the open-source embedding function
         embedding_function = SentenceTransformerEmbeddings(
@@ -105,20 +110,29 @@ class Pipe:
         )
 
         # Load documents into Chroma
-        db = Chroma.from_documents(docs, embedding_function)
-        print("---------DB----------")
-        print(db)
-        print(type(db))
+        vectorstore = Chroma.from_documents(splits, embedding_function)
+        retriever = vectorstore.as_retriever(
+            search_type="similarity", search_kwargs={"k": 6}
+        )
+        retrieved_docs = retriever.invoke(query)
+        print("-------RETRIEVED DOCS-------")
+        print(retrieved_docs)
+        prompt = hub.pull("rlm/rag-prompt", api_key="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")
 
-        # Get the query from the user and query Chroma with it
-        query = get_last_user_message(body["messages"])
-        print("------QUERY------")
-        print(query)
-        docs = db.similarity_search(query)
+        def format_docs(docs):
+            return "\n\n".join(doc.page_content for doc in docs)
 
-        # Return response
-        print(docs[0].page_content)
-        response = query_engine.query(user_message)
-        print(docs)
+        # Initialize model
+        llm = OllamaLLM(model=user_valves.OLLAMA_MODEL)
+        print("------DEBUG: MODEL--------")
+        print(llm)
+        #print(type(query))
 
-        return docs[0].page_content
+        rag_chain = (
+            {"context": retriever | format_docs, "question": RunnablePassthrough()}
+            | prompt
+            | llm
+            | StrOutputParser()
+        )
+
+        print(rag_chain.invoke(query))
