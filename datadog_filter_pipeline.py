@@ -19,9 +19,7 @@ class Filter:
         priority: int = Field(
             default=0, description="Priority level for the filter operations."
         )
-        # Default API key can't be unset or set to a blank string because of a validation check by ddtrace
         DD_API_KEY: str = Field(
-            default="enter_your_key", 
             description="DataDog API key"
         )
         DD_SITE: str = Field(
@@ -46,6 +44,9 @@ class Filter:
         self.LLMObs = LLMObs()
         self.llm_span = None
         self.chat_generations = {}
+        pass
+
+    def inlet(self, body: dict, __user__: Optional[dict] = None) -> dict:
 
         self.LLMObs.enable(
             ml_app=self.valves.ML_APP,
@@ -56,9 +57,6 @@ class Filter:
             env="test",
             service="test",
         )
-        pass
-
-    def inlet(self, body: dict, __user__: Optional[dict] = None) -> dict:
 
         self.llm_span = self.LLMObs.llm(
             model_name=body["model"],
