@@ -19,7 +19,11 @@ class Filter:
         priority: int = Field(
             default=0, description="Priority level for the filter operations."
         )
-        DD_API_KEY: str = Field(default="", description="DataDog API key")
+        # Default API key can't be unset or set to a blank string because of a validation check by ddtrace
+        DD_API_KEY: str = Field(
+            default="enter_your_key", 
+            description="DataDog API key"
+        )
         DD_SITE: str = Field(
             default="datadoghq.com",
             description="Your DataDog site. Set if your account is hosted in a specific region.",
