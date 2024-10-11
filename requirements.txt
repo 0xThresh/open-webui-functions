@@ -1,7 +1,9 @@
-llama_index
+#llama_index
 sqlalchemy
 psycopg2-binary
-llama_index.llms.ollama
+#llama_index.llms.ollama
 langchain_chroma
 langchain_community
 langchain_text_splitters
+langchain_core
+langchain==0.3

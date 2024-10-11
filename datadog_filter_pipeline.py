@@ -1,118 +1,80 @@
 """
 title: DataDog Filter Pipeline
-author: 0xThresh
-date: 2024-06-06
-version: 1.0
-license: MIT
-description: A filter pipeline that sends traces to DataDog.
+author: James W. (0xThresh)
+author_url: https://github.com/0xThresh
+funding_url: https://github.com/open-webui
+version: 1.1
 requirements: ddtrace
-environment_variables: DD_LLMOBS_AGENTLESS_ENABLED, DD_LLMOBS_ENABLED, DD_LLMOBS_APP_NAME, DD_API_KEY, DD_SITE 
 """
 
-from typing import List, Optional
-import os
-
-from utils.pipelines.main import get_last_user_message, get_last_assistant_message
-from pydantic import BaseModel
+# You can read more about the full configuration here: https://blog.opensourceai.dev/monitor-open-webui-with-datadog-llm-observability-620ef3a598c6
+from typing import Optional
+from open_webui.utils.misc import get_last_user_message, get_last_assistant_message
+from pydantic import Field, BaseModel
 from ddtrace.llmobs import LLMObs
 
 
-class Pipeline:
+class Filter:
     class Valves(BaseModel):
-        # List target pipeline ids (models) that this filter will be connected to.
-        # If you want to connect this filter to all pipelines, you can set pipelines to ["*"]
-        # e.g. ["llama3:latest", "gpt-3.5-turbo"]
-        pipelines: List[str] = []
-
-        # Assign a priority level to the filter pipeline.
-        # The priority level determines the order in which the filter pipelines are executed.
-        # The lower the number, the higher the priority.
-        priority: int = 0
-
-        # Valves
-        dd_api_key: str
-        dd_site: str
-        ml_app: str
+        priority: int = Field(
+            default=0, description="Priority level for the filter operations."
+        )
+        DD_API_KEY: str = Field(default="", description="DataDog API key")
+        DD_SITE: str = Field(
+            default="datadoghq.com",
+            description="Your DataDog site. Set if your account is hosted in a specific region.",
+        )
+        ML_APP: str = Field(
+            default="Open WebUI",
+            description="Name of the app shown in DataDog LLM traces",
+        )
+        pass
 
     def __init__(self):
-        # Pipeline filters are only compatible with Open WebUI
-        # You can think of filter pipeline as a middleware that can be used to edit the form data before it is sent to the OpenAI API.
         self.type = "filter"
-
-        # Optionally, you can set the id and name of the pipeline.
-        # Best practice is to not specify the id so that it can be automatically inferred from the filename, so that users can install multiple versions of the same pipeline.
-        # The identifier must be unique across all pipelines.
-        # The identifier must be an alphanumeric string that can include underscores or hyphens. It cannot contain spaces, special characters, slashes, or backslashes.
-        # self.id = "datadog_filter_pipeline"
         self.name = "DataDog Filter"
 
-        # Initialize
-        self.valves = self.Valves(
-            **{
-                "pipelines": ["*"],  # Connect to all pipelines
-                "dd_api_key": os.getenv("DD_API_KEY"),
-                "dd_site": os.getenv("DD_SITE", "datadoghq.com"),
-                "ml_app": os.getenv("ML_APP", "pipelines-test"),
-            }
-        )
+        # Initialize 'valves' with specific configurations. Using 'Valves' instance helps encapsulate settings,
+        # which ensures settings are managed cohesively and not confused with operational flags like 'file_handler'.
+        self.valves = self.Valves()
 
         # DataDog LLMOBS docs: https://docs.datadoghq.com/tracing/llm_observability/sdk/
         self.LLMObs = LLMObs()
         self.llm_span = None
         self.chat_generations = {}
-        pass
 
-    async def on_startup(self):
-        # This function is called when the server is started.
-        print(f"on_startup:{__name__}")
-        self.set_dd()
-        pass
-
-    async def on_shutdown(self):
-        # This function is called when the server is stopped.
-        print(f"on_shutdown:{__name__}")
-        self.LLMObs.flush()
-        pass
-
-    async def on_valves_updated(self):
-        # This function is called when the valves are updated.
-        self.set_dd()
-        pass
-
-    def set_dd(self):
         self.LLMObs.enable(
-            ml_app=self.valves.ml_app,
-            api_key=self.valves.dd_api_key,
-            site=self.valves.dd_site,
+            ml_app=self.valves.ML_APP,
+            api_key=self.valves.DD_API_KEY,
+            site=self.valves.DD_SITE,
             agentless_enabled=True,
             integrations_enabled=True,
+            env="test",
+            service="test",
         )
+        pass
 
-    async def inlet(self, body: dict, user: Optional[dict] = None) -> dict:
-        print(f"inlet:{__name__}")
+    def inlet(self, body: dict, __user__: Optional[dict] = None) -> dict:
 
         self.llm_span = self.LLMObs.llm(
             model_name=body["model"],
             name=f"filter:{__name__}",
             model_provider="open-webui",
-            session_id=body["chat_id"],
-            ml_app=self.valves.ml_app
+            session_id=body["metadata"]["chat_id"],
+            ml_app=self.valves.ML_APP,
         )
 
         self.LLMObs.annotate(
-            span = self.llm_span,
-            input_data = get_last_user_message(body["messages"]),
+            span=self.llm_span,
+            input_data=get_last_user_message(body["messages"]),
         )
 
         return body
 
-
-    async def outlet(self, body: dict, user: Optional[dict] = None) -> dict:
-        print(f"outlet:{__name__}")
-
+    def outlet(self, body: dict, __user__: Optional[dict] = None) -> dict:
         self.LLMObs.annotate(
-            span = self.llm_span,
-            output_data = get_last_assistant_message(body["messages"]),
+            span=self.llm_span,
+            output_data=get_last_assistant_message(body["messages"]),
         )
 
         self.llm_span.finish()
