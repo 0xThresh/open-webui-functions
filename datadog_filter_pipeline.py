@@ -17,9 +17,11 @@ from ddtrace.llmobs import LLMObs
 class Filter:
     class Valves(BaseModel):
         priority: int = Field(
-            default=0, description="Priority level for the filter operations."
+            default=0, 
+            description="Priority level for the filter operations."
         )
         DD_API_KEY: str = Field(
+            default="",
             description="DataDog API key"
         )
         DD_SITE: str = Field(
