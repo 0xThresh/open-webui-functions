@@ -3,7 +3,7 @@ title: Llama Index DB Pipe
 author: James W. (0xThresh)
 author_url: https://github.com/0xThresh
 funding_url: https://github.com/open-webui
-version: 1.2
+version: 1.3
 requirements: llama_index, sqlalchemy, mysql-connector, psycopg2-binary, llama_index.llms.ollama
 """
 
@@ -87,7 +87,7 @@ class Pipe:
 
         return self.engine
 
-    def pipe(
+    async def pipe(
         self,
         body: dict,
         __user__: dict,
@@ -97,6 +97,12 @@ class Pipe:
         __task_body__: Optional[dict] = None,
         __valves__=None,
     ) -> Union[str, Generator, Iterator]:
+        await __event_emitter__(
+            {
+                "type": "status",
+                "data": {"description": "Connecting to the database...", "done": False},
+            }
+        )
 
         print(f"pipe:{__name__}")
 
@@ -107,6 +113,12 @@ class Pipe:
         self.init_db_connection()
         sql_database = SQLDatabase(
             self.engine, include_tables=self.valves.DB_TABLE.split(",")
+        )
+        await __event_emitter__(
+            {
+                "type": "status",  # We set the type here
+                "data": {"description": "Querying the database...", "done": False},
+            }
         )
 
         # Set up LLM connection
@@ -151,6 +163,13 @@ class Pipe:
         )
 
         user_message = get_last_user_message(body["messages"])
+
+        await __event_emitter__(
+            {
+                "type": "status",
+                "data": {"description": "Returning response...", "done": True},
+            }
+        )
 
         response = query_engine.query(user_message)
 
